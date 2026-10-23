@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pinch Filters</title>
+<style>
+  :root{
+    --ink:#101216;
+    --glass:rgba(16,18,22,.68);
+    --paper:#f4f2ed;
+    --dim:rgba(244,242,237,.64);
+    --focus:#ffc42e;
+    --alert:#ff6b5e;
+    --line:rgba(255,255,255,.16);
+    --ui:"Avenir Next","Segoe UI Variable Text","Segoe UI",ui-sans-serif,system-ui,-apple-system,"Helvetica Neue",sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:#000;color:var(--paper);font-family:var(--ui);overflow:hidden;-webkit-font-smoothing:antialiased}
+  [hidden]{display:none!important}
+  button{font-family:inherit}
+
+  /* The raw webcam element stays in the DOM (some browsers pause hidden video) but is never seen. */
+  #cam{position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none}
+  #stage{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;background:#000}
+
+  /* ---------- buttons ---------- */
+  .btn{appearance:none;border:0;border-radius:999px;padding:12px 22px;font-size:15px;font-weight:650;letter-spacing:.005em;cursor:pointer;transition:transform .12s ease,background-color .12s ease}
+  .btn:active{transform:scale(.97)}
+  .btn:focus-visible,.tool:focus-visible,.chip-btn:focus-visible{outline:2px solid var(--paper);outline-offset:3px}
+  .btn.primary{background:var(--focus);color:#201700}
+  .btn.primary:hover{background:#ffd154}
+  .btn.ghost{background:rgba(255,255,255,.1);color:var(--paper)}
+  .btn.ghost:hover{background:rgba(255,255,255,.16)}
+  .btn.wide{width:100%}
+
+  /* ---------- overlays ---------- */
+  .overlay{position:fixed;inset:0;z-index:30;display:grid;place-items:center;padding:max(20px,env(safe-area-inset-top)) 20px max(20px,env(safe-area-inset-bottom));background:rgba(7,8,10,.9);-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px)}
+  .card{width:min(420px,100%);background:#15181d;border:1px solid var(--line);border-radius:20px;padding:28px 26px 24px;text-align:left}
+  .demo{display:block;width:100%;height:auto;margin:0 0 18px;max-height:120px}
+  .demo-rect{fill:rgba(255,196,46,.1);stroke:var(--focus);stroke-width:2}
+  .demo-dot{fill:var(--focus)}
+  h1{margin:0 0 8px;font-size:34px;line-height:1.05;font-weight:750;letter-spacing:-.035em}
+  .lead{margin:0 0 18px;font-size:16px;line-height:1.45;color:var(--dim);max-width:34ch}
+  .steps{margin:0 0 22px;padding-left:1.25em;font-size:15px;line-height:1.55;color:var(--paper)}
+  .steps li{padding-left:.2em}
+  .steps li::marker{color:var(--focus);font-weight:700}
+  .fine{margin:14px 0 0;font-size:13px;line-height:1.45;color:var(--dim)}
+  .error{margin:14px 0 0;font-size:14px;line-height:1.45;color:var(--alert)}
+
+  /* ---------- crop and zoom dock ---------- */
+  .dock{position:fixed;z-index:20;left:50%;transform:translateX(-50%);bottom:max(14px,env(safe-area-inset-bottom));width:min(460px,calc(100% - 24px));background:var(--glass);-webkit-backdrop-filter:blur(18px) saturate(1.2);backdrop-filter:blur(18px) saturate(1.2);border:1px solid var(--line);border-radius:22px;padding:18px 18px 16px}
+  .dock-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+  .dock h2{margin:0;font-size:19px;font-weight:700;letter-spacing:-.02em}
+  .chip{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--dim);background:rgba(255,255,255,.08);border-radius:999px;padding:5px 11px;border:0}
+  .chip i{width:7px;height:7px;border-radius:50%;background:#8a8f98}
+  .chip[data-state="ready"] i{background:#7be495}
+  .chip[data-state="loading"] i{background:var(--focus);animation:pulse 1.2s ease-in-out infinite}
+  .chip[data-state="failed"] i{background:var(--alert)}
+  .chip-btn{cursor:pointer;color:var(--paper)}
+  .row{display:flex;align-items:center;gap:12px;margin:10px 0}
+  .row.between{justify-content:space-between}
+  .row label{font-size:14px;color:var(--dim);min-width:44px}
+  .row input[type=range]{flex:1;accent-color:var(--focus);height:28px}
+  .row output{min-width:44px;text-align:right;font-size:14px;font-variant-numeric:tabular-nums}
+  .switch{display:inline-flex;align-items:center;gap:9px;font-size:14px;cursor:pointer;color:var(--paper);min-width:0}
+  .switch input{accent-color:var(--focus);width:18px;height:18px;margin:0}
+  .dock .btn.ghost{padding:9px 16px;font-size:14px}
+  .dock .fine{margin:2px 0 14px}
+
+  /* ---------- live HUD ---------- */
+  #hud{position:fixed;inset:0;z-index:10;pointer-events:none}
+  .pill{position:absolute;left:max(14px,env(safe-area-inset-left));top:max(14px,env(safe-area-inset-top));display:flex;align-items:center;gap:10px;max-width:calc(100% - 28px);padding:9px 15px;border-radius:999px;background:var(--glass);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);border:1px solid var(--line);font-size:14px;font-weight:550}
+  .pill .dot{flex:none;width:9px;height:9px;border-radius:50%;background:#8a8f98}
+  .pill[data-state="ready"] .dot{background:var(--paper)}
+  .pill[data-state="drawing"] .dot{background:var(--focus);animation:pulse 1s ease-in-out infinite}
+  .pill[data-state="error"] .dot{background:var(--alert)}
+  .tools{position:absolute;right:max(14px,env(safe-area-inset-right));bottom:max(14px,env(safe-area-inset-bottom));display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;pointer-events:auto}
+  .tool{appearance:none;border:1px solid var(--line);background:var(--glass);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);color:var(--paper);font-size:14px;font-weight:600;padding:9px 14px;border-radius:999px;cursor:pointer}
+  .tool:hover{background:rgba(40,44,52,.8)}
+  .tool[aria-pressed="true"]{background:var(--focus);color:#201700;border-color:transparent}
+  .hint{position:absolute;left:50%;transform:translateX(-50%);top:max(64px,calc(env(safe-area-inset-top) + 52px));width:min(440px,calc(100% - 28px));text-align:center;font-size:15px;line-height:1.4;padding:10px 16px;border-radius:14px;background:var(--glass);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);border:1px solid var(--line);transition:opacity .6s ease}
+  .hint.gone{opacity:0}
+
+  /* ---------- loader and toast ---------- */
+  .spinner{width:46px;height:46px;border-radius:50%;border:3px solid rgba(255,255,255,.16);border-top-color:var(--focus);animation:spin .9s linear infinite;margin:0 auto 18px}
+  .loading-card{text-align:center;max-width:340px}
+  .loading-card p{margin:0}
+  .loading-card .t{font-size:17px;font-weight:650;margin-bottom:6px}
+  .loading-card .s{font-size:14px;line-height:1.45;color:var(--dim)}
+  #toast{position:fixed;z-index:40;left:50%;bottom:max(84px,calc(env(safe-area-inset-bottom) + 70px));transform:translateX(-50%) translateY(8px);opacity:0;pointer-events:none;max-width:min(460px,calc(100% - 28px));padding:11px 16px;border-radius:14px;background:rgba(16,18,22,.92);border:1px solid var(--line);font-size:14px;line-height:1.4;text-align:center;transition:opacity .25s ease,transform .25s ease}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  @media (prefers-reduced-motion:reduce){
+    .spinner{animation-duration:2.4s}
+    .chip[data-state="loading"] i,.pill[data-state="drawing"] .dot{animation:none}
+    .btn,.hint,#toast{transition:none}
+  }
+  @media (max-width:520px){
+    h1{font-size:30px}
+    .tools{left:12px;right:12px;justify-content:center}
+  }
+</style>
+</head>
+<body>
+
+<video id="cam" playsinline muted autoplay></video>
+<canvas id="stage"></canvas>
+
+<!-- Live HUD -->
+<div id="hud" hidden>
+  <div class="pill" id="statusPill" data-state="idle"><i class="dot"></i><span id="statusText">Starting…</span></div>
+  <div class="hint" id="hint">Pinch thumb and index finger on both hands, then move your hands apart to size a box. Release to keep it.</div>
+  <div class="tools">
+    <button class="tool" data-act="undo" title="Remove the last box (Z)">Undo</button>
+    <button class="tool" data-act="clear" title="Remove every box (C)">Clear all</button>
+    <button class="tool" data-act="skeleton" aria-pressed="false" title="Show hand tracking (H)">Show hands</button>
+    <button class="tool" data-act="recrop" title="Change the crop and zoom">Crop</button>
+    <button class="tool" data-act="fullscreen" title="Fullscreen (F)">Fullscreen</button>
+  </div>
+</div>
+
+<!-- 1. Welcome modal -->
+<div id="welcome" class="overlay" role="dialog" aria-modal="true" aria-labelledby="welcomeTitle">
+  <div class="card">
+    <svg class="demo" viewBox="0 0 220 110" aria-hidden="true">
+      <rect class="demo-rect" x="48" y="22" width="40" height="22" rx="2">
+        <animate attributeName="width" values="40;124;40" keyTimes="0;.5;1" dur="3.6s" repeatCount="indefinite" calcMode="spline" keySplines=".4 0 .2 1;.4 0 .2 1"/>
+        <animate attributeName="height" values="22;66;22" keyTimes="0;.5;1" dur="3.6s" repeatCount="indefinite" calcMode="spline" keySplines=".4 0 .2 1;.4 0 .2 1"/>
+      </rect>
+      <circle class="demo-dot" cx="48" cy="22" r="7"/>
+      <circle class="demo-dot" cx="88" cy="44" r="7">
+        <animate attributeName="cx" values="88;172;88" keyTimes="0;.5;1" dur="3.6s" repeatCount="indefinite" calcMode="spline" keySplines=".4 0 .2 1;.4 0 .2 1"/>
+        <animate attributeName="cy" values="44;88;44" keyTimes="0;.5;1" dur="3.6s" repeatCount="indefinite" calcMode="spline" keySplines=".4 0 .2 1;.4 0 .2 1"/>
+      </circle>
+    </svg>
+    <h1 id="welcomeTitle">Pinch Filters</h1>
+    <p class="lead">Draw boxes of live video effects on your webcam feed with a two-handed pinch.</p>
+    <ol class="steps">
+      <li>Open your webcam and frame your shot.</li>
+      <li>Pinch thumb and index finger on both hands.</li>
+      <li>Move your hands apart to size the box, then release to keep it.</li>
+    </ol>
+    <button id="btnCam" class="btn primary wide">Open webcam</button>
+    <p id="camError" class="error" role="alert" hidden></p>
+    <p class="fine">Hand tracking runs in your browser. Your video never leaves this device.</p>
+  </div>
+</div>
+
+<!-- 2. Crop and zoom preview -->
+<div id="setup" class="dock" hidden>
+  <div class="dock-head">
+    <h2>Frame your shot</h2>
+    <button id="modelChip" class="chip chip-btn" data-state="loading" type="button" disabled><i></i><span id="modelText">Loading hand tracking</span></button>
+  </div>
+  <div class="row">
+    <label for="zoom">Zoom</label>
+    <input id="zoom" type="range" min="1" max="4" step="0.01" value="1">
+    <output id="zoomVal" for="zoom">1.0×</output>
+  </div>
+  <div class="row between">
+    <label class="switch"><input type="checkbox" id="mirror" checked><span>Mirror view</span></label>
+    <button class="btn ghost" id="btnReset" type="button">Reset crop</button>
+  </div>
+  <p class="fine">Drag the preview to reposition it. Scroll to zoom.</p>
+  <button id="btnStart" class="btn primary wide" type="button">Start</button>
+</div>
+
+<!-- 3. Model loader -->
+<div id="loader" class="overlay" hidden role="status" aria-live="polite">
+  <div class="loading-card">
+    <div class="spinner"></div>
+    <p class="t" id="loaderTitle">Loading hand tracking</p>
+    <p class="s" id="loaderSub">The first load downloads about 8 MB. Your browser caches it after that.</p>
+  </div>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script src="main.js"></script>
+</body>
+</html>
